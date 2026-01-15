@@ -918,14 +918,11 @@ def carregar_dados_itcmd(_engine):
                 query_afre = f"""
                     SELECT
                         cd_matricula,
-                        nm_afre,
                         nu_ano_ref,
                         nu_per_ref,
-                        qt_dias_ativa,
-                        dt_inicio_periodo,
-                        dt_fim_periodo
+                        qt_dias_ativa
                     FROM usr_sat_ods.fis_afre_periodo
-                    WHERE TRIM(cd_matricula) IN ('{matriculas_str}')
+                    WHERE CAST(cd_matricula AS STRING) IN ('{matriculas_str}')
                 """
                 try:
                     df_afre = pd.read_sql(query_afre, _engine)
@@ -953,9 +950,10 @@ def carregar_dados_itcmd(_engine):
                         nu_cnpj,
                         nm_razao_social,
                         cd_cnae,
-                        nm_cnae_secao,
-                        nm_regime_tributario,
-                        nm_municipio
+                        de_cnae,
+                        de_secao,
+                        nm_enq_empresa,
+                        nm_munic
                     FROM usr_sat_ods.vw_ods_contrib
                     WHERE nu_ie IN ('{ies_str}')
                 """
@@ -972,13 +970,13 @@ def carregar_dados_itcmd(_engine):
             query_acomp = f"""
                 SELECT
                     id_documento_os,
-                    nu_of,
+                    nu_documento_of,
                     nm_estado_os,
-                    dt_documento,
-                    tx_observacao
+                    dt_documento_os,
+                    de_motivo_os
                 FROM usr_sat_ods.fis_acomp_raw
-                WHERE nu_of IN ('{lista_ofs_str}')
-                ORDER BY dt_documento DESC
+                WHERE nu_documento_of IN ('{lista_ofs_str}')
+                ORDER BY dt_documento_os DESC
             """
             try:
                 df_acomp = pd.read_sql(query_acomp, _engine)
@@ -991,14 +989,12 @@ def carregar_dados_itcmd(_engine):
             query_termo = f"""
                 SELECT
                     nu_termo_encerramento,
-                    nu_of,
+                    os,
                     nm_estado,
                     dt_documento,
-                    vl_icms_devido,
-                    vl_multa,
-                    vl_total
+                    dt_encerramento
                 FROM usr_sat_ods.fis_termo_encerram_fisc_raw
-                WHERE nu_of IN ('{lista_ofs_str}')
+                WHERE os IN ('{lista_ofs_str}')
                 ORDER BY dt_documento DESC
             """
             try:
@@ -4044,8 +4040,8 @@ def pagina_itcmd(dados, filtros):
 
         with col1:
             # Distribuição por CNAE
-            if 'nm_cnae_secao' in df_contrib.columns:
-                df_cnae = df_contrib['nm_cnae_secao'].value_counts().head(10).reset_index()
+            if 'de_secao' in df_contrib.columns:
+                df_cnae = df_contrib['de_secao'].value_counts().head(10).reset_index()
                 df_cnae.columns = ['setor', 'quantidade']
 
                 fig = px.pie(
@@ -4062,8 +4058,8 @@ def pagina_itcmd(dados, filtros):
 
         with col2:
             # Distribuição por regime tributário
-            if 'nm_regime_tributario' in df_contrib.columns:
-                df_regime = df_contrib['nm_regime_tributario'].value_counts().reset_index()
+            if 'nm_enq_empresa' in df_contrib.columns:
+                df_regime = df_contrib['nm_enq_empresa'].value_counts().reset_index()
                 df_regime.columns = ['regime', 'quantidade']
 
                 fig = px.bar(
@@ -4117,7 +4113,7 @@ def pagina_itcmd(dados, filtros):
             st.metric("📋 Total Acompanhamentos", f"{total_acomp:,}")
 
         with col2:
-            ofs_com_acomp = df_acomp['nu_of'].nunique()
+            ofs_com_acomp = df_acomp['nu_documento_of'].nunique()
             st.metric("📁 OFs com Follow-up", f"{ofs_com_acomp:,}")
 
         with col3:
@@ -4147,7 +4143,7 @@ def pagina_itcmd(dados, filtros):
         with col2:
             # Últimos acompanhamentos
             st.markdown("#### 📋 Últimos Acompanhamentos")
-            colunas_acomp = ['nu_of', 'nm_estado_os', 'dt_documento']
+            colunas_acomp = ['nu_documento_of', 'nm_estado_os', 'dt_documento_os', 'de_motivo_os']
             colunas_acomp = [c for c in colunas_acomp if c in df_acomp.columns]
             st.dataframe(df_acomp[colunas_acomp].head(10), use_container_width=True)
 
@@ -4164,7 +4160,7 @@ def pagina_itcmd(dados, filtros):
             st.metric("📑 Total Termos", f"{total_termos:,}")
 
         with col2:
-            ofs_encerradas = df_termo['nu_of'].nunique()
+            ofs_encerradas = df_termo['os'].nunique()
             st.metric("✅ OFs Encerradas", f"{ofs_encerradas:,}")
 
         with col3:
@@ -4197,7 +4193,7 @@ def pagina_itcmd(dados, filtros):
 
             total_ofs = len(df_of)
             ofs_com_notif = df_notif['nu_of'].nunique() if not df_notif.empty else 0
-            ofs_encerradas = df_termo['nu_of'].nunique()
+            ofs_encerradas = df_termo['os'].nunique()
 
             fig = go.Figure(go.Funnel(
                 y=['OFs Abertas', 'Com Notificação', 'Encerradas'],
@@ -4214,7 +4210,7 @@ def pagina_itcmd(dados, filtros):
 
         # Tabela de termos recentes
         st.markdown("#### 📋 Termos de Encerramento Recentes")
-        colunas_termo = ['nu_termo_encerramento', 'nu_of', 'nm_estado', 'dt_documento']
+        colunas_termo = ['nu_termo_encerramento', 'os', 'nm_estado', 'dt_documento', 'dt_encerramento']
         colunas_termo = [c for c in colunas_termo if c in df_termo.columns]
         st.dataframe(df_termo[colunas_termo].head(15), use_container_width=True)
 
