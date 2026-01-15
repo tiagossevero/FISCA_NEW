@@ -739,6 +739,173 @@ def carregar_dataset_ml(_engine):
         return pd.DataFrame()
 
 # =============================================================================
+# 6.1. FUNÇÕES DE CARREGAMENTO - ITCMD
+# =============================================================================
+
+# Coordenadores ITCMD
+COORDENADORES_ITCMD = ['9507248', '6172598']
+
+@st.cache_data(ttl=1800)
+def carregar_dados_itcmd(_engine):
+    """Carrega dados das OFs do setor ITCMD - filtrado por coordenadores específicos."""
+    dados_itcmd = {}
+
+    if _engine is None:
+        return {}
+
+    try:
+        # 1. Ordens de Fiscalização (filtradas pelos coordenadores ITCMD)
+        query_of = f"""
+            SELECT
+                id_documento,
+                numero_documento,
+                nu_of,
+                dt_documento,
+                data_emissao,
+                nm_estado,
+                situacao,
+                cd_usuario_emitente,
+                tx_recomendacoes,
+                dt_inicio,
+                dt_fim,
+                tx_motivacao_of,
+                nm_local_execucao,
+                nm_gerencia,
+                nm_local_emissao,
+                nu_mat_emitente,
+                nu_mat_coordenador,
+                nm_origem,
+                dt_alteracao_ods,
+                cd_ges,
+                nm_ges,
+                YEAR(dt_documento) as ano
+            FROM usr_sat_ods.fis_of_raw
+            WHERE cd_usuario_emitente IN ('9507248', '6172598')
+            ORDER BY dt_documento DESC
+        """
+        df_of = pd.read_sql(query_of, _engine)
+        df_of.columns = [col.lower() for col in df_of.columns]
+        dados_itcmd['of_itcmd'] = df_of
+
+        # Obter lista de nu_of para filtrar as outras tabelas
+        if not df_of.empty:
+            lista_ofs = df_of['nu_of'].dropna().unique().tolist()
+            lista_ofs_str = "', '".join([str(x) for x in lista_ofs])
+
+            # 2. Declarações (DDE) vinculadas às OFs do ITCMD
+            query_dde = f"""
+                SELECT
+                    nu_declaracao,
+                    nu_of,
+                    nu_ie,
+                    nm_razao_social,
+                    cd_ges,
+                    cd_gerfe,
+                    cd_munic,
+                    cd_motivo,
+                    cd_estado_conta,
+                    dt_entrega,
+                    vl_declarado,
+                    vl_data_declaracao,
+                    vl_total_saldo,
+                    vl_pago,
+                    vl_parc_pago,
+                    vl_parc_saldo,
+                    vl_dva_total,
+                    vl_dva_saldo,
+                    vl_dva_pago,
+                    dt_ultima_atualizacao,
+                    YEAR(dt_entrega) as ano
+                FROM usr_sat_ods.fis_of_em_numeros_dde
+                WHERE nu_of IN ('{lista_ofs_str}')
+                ORDER BY dt_entrega DESC
+            """
+            df_dde = pd.read_sql(query_dde, _engine)
+            df_dde.columns = [col.lower() for col in df_dde.columns]
+            dados_itcmd['dde_itcmd'] = df_dde
+
+            # 3. Notificações Fiscais vinculadas às OFs do ITCMD
+            query_notif = f"""
+                SELECT
+                    nu_notificacao_fiscal,
+                    nu_of,
+                    nu_ie,
+                    nu_cpf,
+                    nu_cnpj,
+                    nm_razao_social,
+                    cd_gerfe,
+                    cd_ges,
+                    cd_munic,
+                    cd_infracao,
+                    cd_edo_det_conta,
+                    nm_estado,
+                    dt_documento,
+                    vl_total,
+                    vl_pago,
+                    vl_parc_pago,
+                    vl_parc_saldo,
+                    vl_recl_tot,
+                    vl_dva_total,
+                    vl_dva_saldo,
+                    vl_dva_pago,
+                    dt_ultima_atualizacao,
+                    dt_ciencia,
+                    YEAR(dt_documento) as ano
+                FROM usr_sat_ods.fis_of_em_numeros_notif
+                WHERE nu_of IN ('{lista_ofs_str}')
+                ORDER BY dt_documento DESC
+            """
+            df_notif = pd.read_sql(query_notif, _engine)
+            df_notif.columns = [col.lower() for col in df_notif.columns]
+            dados_itcmd['notif_itcmd'] = df_notif
+
+            # 4. Termos de Infração (TIFDP) vinculados às OFs do ITCMD
+            query_tifdp = f"""
+                SELECT
+                    nu_infr_fiscal,
+                    nu_notificacao_gerada,
+                    nu_of,
+                    nu_ie,
+                    nu_cpf,
+                    nu_cnpj,
+                    nm_razao_social,
+                    cd_ges,
+                    cd_gerfe,
+                    cd_munic,
+                    cd_infracao,
+                    nm_estado,
+                    dt_documento,
+                    vl_apurado,
+                    vl_pago,
+                    vl_parc_pago,
+                    vl_parc_saldo,
+                    vl_convertido_notif,
+                    vl_cancelado,
+                    vl_dva_total,
+                    vl_dva_saldo,
+                    vl_dva_pago,
+                    dt_ultima_atualizacao,
+                    dt_ciencia,
+                    YEAR(dt_documento) as ano
+                FROM usr_sat_ods.fis_of_em_numeros_tifdp
+                WHERE nu_of IN ('{lista_ofs_str}')
+                ORDER BY dt_documento DESC
+            """
+            df_tifdp = pd.read_sql(query_tifdp, _engine)
+            df_tifdp.columns = [col.lower() for col in df_tifdp.columns]
+            dados_itcmd['tifdp_itcmd'] = df_tifdp
+        else:
+            dados_itcmd['dde_itcmd'] = pd.DataFrame()
+            dados_itcmd['notif_itcmd'] = pd.DataFrame()
+            dados_itcmd['tifdp_itcmd'] = pd.DataFrame()
+
+        return dados_itcmd
+
+    except Exception as e:
+        st.error(f"Erro ao carregar dados ITCMD: {str(e)[:150]}")
+        return {}
+
+# =============================================================================
 # 7. FUNÇÕES AUXILIARES DE VISUALIZAÇÃO
 # =============================================================================
 
@@ -3116,7 +3283,581 @@ def pagina_analise_ges(dados, filtros):
     • Oportunidade de melhoria em processos e conversão
     </div>
     """, unsafe_allow_html=True)
-    
+
+# =============================================================================
+# 8.12. PÁGINA ITCMD
+# =============================================================================
+
+def pagina_itcmd(dados, filtros):
+    """Análise das Ordens de Fiscalização do setor ITCMD."""
+    st.markdown("<h1 class='main-header'>📜 ITCMD - Análise de Fiscalizações</h1>", unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class='info-box'>
+    <b>📜 Setor ITCMD - Imposto sobre Transmissão Causa Mortis e Doação</b><br>
+    Análise das Ordens de Fiscalização emitidas pelos coordenadores do setor ITCMD
+    (usuários 9507248 e 6172598), incluindo declarações, notificações fiscais e termos de infração.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Carregar dados ITCMD sob demanda
+    engine = st.session_state.get('engine')
+    if engine is None:
+        st.error("❌ Conexão com banco de dados não disponível.")
+        return
+
+    with st.spinner('⏳ Carregando dados do ITCMD...'):
+        dados_itcmd = carregar_dados_itcmd(engine)
+
+    if not dados_itcmd:
+        st.warning("⚠️ Não foi possível carregar os dados do ITCMD.")
+        return
+
+    # Obter dataframes
+    df_of = dados_itcmd.get('of_itcmd', pd.DataFrame())
+    df_dde = dados_itcmd.get('dde_itcmd', pd.DataFrame())
+    df_notif = dados_itcmd.get('notif_itcmd', pd.DataFrame())
+    df_tifdp = dados_itcmd.get('tifdp_itcmd', pd.DataFrame())
+
+    if df_of.empty:
+        st.warning("⚠️ Nenhuma Ordem de Fiscalização encontrada para o setor ITCMD.")
+        return
+
+    # Aplicar filtros de ano se disponíveis
+    if filtros.get('anos') and 'ano' in df_of.columns:
+        df_of = df_of[df_of['ano'].isin(filtros['anos'])]
+        if not df_dde.empty and 'ano' in df_dde.columns:
+            df_dde = df_dde[df_dde['ano'].isin(filtros['anos'])]
+        if not df_notif.empty and 'ano' in df_notif.columns:
+            df_notif = df_notif[df_notif['ano'].isin(filtros['anos'])]
+        if not df_tifdp.empty and 'ano' in df_tifdp.columns:
+            df_tifdp = df_tifdp[df_tifdp['ano'].isin(filtros['anos'])]
+
+    # ========== KPIs PRINCIPAIS ==========
+    st.markdown("<div class='sub-header'>📊 Indicadores Gerais do ITCMD</div>", unsafe_allow_html=True)
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        total_ofs = len(df_of)
+        st.metric("📋 Total de OFs", f"{total_ofs:,}")
+
+    with col2:
+        if not df_dde.empty:
+            total_dde = len(df_dde)
+            st.metric("📄 Declarações (DDE)", f"{total_dde:,}")
+        else:
+            st.metric("📄 Declarações (DDE)", "0")
+
+    with col3:
+        if not df_notif.empty:
+            total_notif = len(df_notif)
+            st.metric("📑 Notificações", f"{total_notif:,}")
+        else:
+            st.metric("📑 Notificações", "0")
+
+    with col4:
+        if not df_tifdp.empty:
+            total_tifdp = len(df_tifdp)
+            st.metric("⚖️ Termos Infração", f"{total_tifdp:,}")
+        else:
+            st.metric("⚖️ Termos Infração", "0")
+
+    with col5:
+        # Contribuintes únicos
+        contribuintes = set()
+        if not df_dde.empty and 'nu_ie' in df_dde.columns:
+            contribuintes.update(df_dde['nu_ie'].dropna().unique())
+        if not df_notif.empty and 'nu_ie' in df_notif.columns:
+            contribuintes.update(df_notif['nu_ie'].dropna().unique())
+        st.metric("🏢 Contribuintes", f"{len(contribuintes):,}")
+
+    # Segunda linha de KPIs - Valores
+    st.markdown("<div class='sub-header'>💰 Valores Totais</div>", unsafe_allow_html=True)
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    with col1:
+        if not df_dde.empty and 'vl_declarado' in df_dde.columns:
+            valor_declarado = pd.to_numeric(df_dde['vl_declarado'], errors='coerce').sum()
+            st.metric("📝 Valor Declarado", formatar_valor(valor_declarado))
+        else:
+            st.metric("📝 Valor Declarado", "R$ 0")
+
+    with col2:
+        if not df_notif.empty and 'vl_total' in df_notif.columns:
+            valor_notif = pd.to_numeric(df_notif['vl_total'], errors='coerce').sum()
+            st.metric("📑 Valor Notificações", formatar_valor(valor_notif))
+        else:
+            st.metric("📑 Valor Notificações", "R$ 0")
+
+    with col3:
+        if not df_tifdp.empty and 'vl_apurado' in df_tifdp.columns:
+            valor_tifdp = pd.to_numeric(df_tifdp['vl_apurado'], errors='coerce').sum()
+            st.metric("⚖️ Valor Apurado TIFDP", formatar_valor(valor_tifdp))
+        else:
+            st.metric("⚖️ Valor Apurado TIFDP", "R$ 0")
+
+    with col4:
+        # Total pago (todas as fontes)
+        total_pago = 0
+        if not df_dde.empty and 'vl_pago' in df_dde.columns:
+            total_pago += pd.to_numeric(df_dde['vl_pago'], errors='coerce').sum()
+        if not df_notif.empty and 'vl_pago' in df_notif.columns:
+            total_pago += pd.to_numeric(df_notif['vl_pago'], errors='coerce').sum()
+        if not df_tifdp.empty and 'vl_pago' in df_tifdp.columns:
+            total_pago += pd.to_numeric(df_tifdp['vl_pago'], errors='coerce').sum()
+        st.metric("💵 Total Pago", formatar_valor(total_pago))
+
+    with col5:
+        # Taxa de recuperação
+        valor_total_lancado = 0
+        if not df_notif.empty and 'vl_total' in df_notif.columns:
+            valor_total_lancado = pd.to_numeric(df_notif['vl_total'], errors='coerce').sum()
+        if valor_total_lancado > 0:
+            taxa_recuperacao = (total_pago / valor_total_lancado) * 100
+            st.metric("📈 Taxa Recuperação", f"{taxa_recuperacao:.1f}%")
+        else:
+            st.metric("📈 Taxa Recuperação", "N/A")
+
+    st.divider()
+
+    # ========== ANÁLISE TEMPORAL ==========
+    st.markdown("<div class='sub-header'>📈 Evolução Temporal</div>", unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Evolução de OFs por ano
+        if 'ano' in df_of.columns:
+            df_of_ano = df_of.groupby('ano').size().reset_index(name='quantidade')
+            df_of_ano = df_of_ano.sort_values('ano')
+
+            fig = px.bar(
+                df_of_ano,
+                x='ano',
+                y='quantidade',
+                title='📋 Ordens de Fiscalização por Ano',
+                template=filtros['tema'],
+                color='quantidade',
+                color_continuous_scale='Blues',
+                text='quantidade'
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(height=400, xaxis_title='Ano', yaxis_title='Quantidade de OFs')
+            st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        # Evolução de valores por ano
+        if not df_notif.empty and 'ano' in df_notif.columns:
+            df_notif['vl_total_num'] = pd.to_numeric(df_notif['vl_total'], errors='coerce')
+            df_notif['vl_pago_num'] = pd.to_numeric(df_notif['vl_pago'], errors='coerce')
+
+            df_valor_ano = df_notif.groupby('ano').agg({
+                'vl_total_num': 'sum',
+                'vl_pago_num': 'sum'
+            }).reset_index()
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=df_valor_ano['ano'],
+                y=df_valor_ano['vl_total_num'],
+                name='Valor Total',
+                marker_color='#1976d2'
+            ))
+            fig.add_trace(go.Bar(
+                x=df_valor_ano['ano'],
+                y=df_valor_ano['vl_pago_num'],
+                name='Valor Pago',
+                marker_color='#388e3c'
+            ))
+            fig.update_layout(
+                title='💰 Valores de Notificações por Ano',
+                template=filtros['tema'],
+                height=400,
+                barmode='group',
+                xaxis_title='Ano',
+                yaxis_title='Valor (R$)'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ========== ANÁLISE POR ESTADO DA OF ==========
+    st.markdown("<div class='sub-header'>🔄 Situação das Ordens de Fiscalização</div>", unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if 'nm_estado' in df_of.columns:
+            df_estado = df_of['nm_estado'].value_counts().reset_index()
+            df_estado.columns = ['estado', 'quantidade']
+
+            fig = px.pie(
+                df_estado,
+                values='quantidade',
+                names='estado',
+                title='📊 Distribuição por Situação',
+                template=filtros['tema'],
+                hole=0.4
+            )
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        if 'nm_estado' in df_of.columns and 'ano' in df_of.columns:
+            df_estado_ano = df_of.groupby(['ano', 'nm_estado']).size().reset_index(name='quantidade')
+
+            fig = px.bar(
+                df_estado_ano,
+                x='ano',
+                y='quantidade',
+                color='nm_estado',
+                title='📈 Evolução por Situação',
+                template=filtros['tema'],
+                barmode='stack'
+            )
+            fig.update_layout(height=400, xaxis_title='Ano', yaxis_title='Quantidade')
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ========== ANÁLISE POR GERÊNCIA ==========
+    st.markdown("<div class='sub-header'>🏢 Análise por Gerência/Local</div>", unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if 'nm_gerencia' in df_of.columns:
+            df_gerencia = df_of['nm_gerencia'].value_counts().head(10).reset_index()
+            df_gerencia.columns = ['gerencia', 'quantidade']
+
+            fig = px.bar(
+                df_gerencia,
+                y='gerencia',
+                x='quantidade',
+                title='🏢 OFs por Gerência (Top 10)',
+                template=filtros['tema'],
+                orientation='h',
+                color='quantidade',
+                color_continuous_scale='Blues',
+                text='quantidade'
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(height=400, yaxis_title='', xaxis_title='Quantidade')
+            st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        if 'nm_local_emissao' in df_of.columns:
+            df_local = df_of['nm_local_emissao'].value_counts().head(10).reset_index()
+            df_local.columns = ['local', 'quantidade']
+
+            fig = px.bar(
+                df_local,
+                y='local',
+                x='quantidade',
+                title='📍 OFs por Local de Emissão (Top 10)',
+                template=filtros['tema'],
+                orientation='h',
+                color='quantidade',
+                color_continuous_scale='Greens',
+                text='quantidade'
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(height=400, yaxis_title='', xaxis_title='Quantidade')
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ========== CRUZAMENTO: NOTIFICAÇÕES ==========
+    if not df_notif.empty:
+        st.markdown("<div class='sub-header'>📑 Análise de Notificações Fiscais</div>", unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if 'nm_estado' in df_notif.columns:
+                df_notif_estado = df_notif['nm_estado'].value_counts().reset_index()
+                df_notif_estado.columns = ['estado', 'quantidade']
+
+                fig = px.pie(
+                    df_notif_estado,
+                    values='quantidade',
+                    names='estado',
+                    title='📊 Notificações por Estado',
+                    template=filtros['tema'],
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            if 'cd_infracao' in df_notif.columns:
+                df_infracao = df_notif['cd_infracao'].value_counts().head(10).reset_index()
+                df_infracao.columns = ['cod_infracao', 'quantidade']
+
+                fig = px.bar(
+                    df_infracao,
+                    y='cod_infracao',
+                    x='quantidade',
+                    title='⚖️ Top 10 Códigos de Infração',
+                    template=filtros['tema'],
+                    orientation='h',
+                    color='quantidade',
+                    color_continuous_scale='Reds',
+                    text='quantidade'
+                )
+                fig.update_traces(textposition='outside')
+                fig.update_layout(height=400, yaxis_title='Código', xaxis_title='Quantidade')
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Maiores notificações
+        st.markdown("#### 🏆 Maiores Notificações por Valor")
+        df_notif['vl_total_num'] = pd.to_numeric(df_notif['vl_total'], errors='coerce')
+        df_top_notif = df_notif.nlargest(10, 'vl_total_num')[['nu_notificacao_fiscal', 'nm_razao_social', 'vl_total', 'vl_pago', 'nm_estado', 'dt_documento']]
+        df_top_notif.columns = ['Notificação', 'Razão Social', 'Valor Total', 'Valor Pago', 'Estado', 'Data']
+        st.dataframe(df_top_notif, use_container_width=True)
+
+    # ========== CRUZAMENTO: TIFDP ==========
+    if not df_tifdp.empty:
+        st.markdown("<div class='sub-header'>⚖️ Análise de Termos de Infração (TIFDP)</div>", unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if 'nm_estado' in df_tifdp.columns:
+                df_tifdp_estado = df_tifdp['nm_estado'].value_counts().reset_index()
+                df_tifdp_estado.columns = ['estado', 'quantidade']
+
+                fig = px.pie(
+                    df_tifdp_estado,
+                    values='quantidade',
+                    names='estado',
+                    title='📊 TIFDP por Estado',
+                    template=filtros['tema'],
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Taxa de conversão em notificação
+            total_tifdp = len(df_tifdp)
+            convertidos = df_tifdp['nu_notificacao_gerada'].notna().sum() if 'nu_notificacao_gerada' in df_tifdp.columns else 0
+            nao_convertidos = total_tifdp - convertidos
+
+            fig = go.Figure(data=[go.Pie(
+                labels=['Convertidos em NF', 'Não Convertidos'],
+                values=[convertidos, nao_convertidos],
+                hole=0.5,
+                marker_colors=['#388e3c', '#c62828']
+            )])
+            fig.update_layout(
+                title=f'📈 Taxa de Conversão TIFDP → NF ({(convertidos/total_tifdp*100):.1f}%)',
+                template=filtros['tema'],
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Maiores valores apurados
+        st.markdown("#### 🏆 Maiores Valores Apurados (TIFDP)")
+        df_tifdp['vl_apurado_num'] = pd.to_numeric(df_tifdp['vl_apurado'], errors='coerce')
+        df_top_tifdp = df_tifdp.nlargest(10, 'vl_apurado_num')[['nu_infr_fiscal', 'nm_razao_social', 'vl_apurado', 'vl_pago', 'nm_estado', 'dt_documento']]
+        df_top_tifdp.columns = ['Termo Infração', 'Razão Social', 'Valor Apurado', 'Valor Pago', 'Estado', 'Data']
+        st.dataframe(df_top_tifdp, use_container_width=True)
+
+    # ========== CRUZAMENTO: DDE ==========
+    if not df_dde.empty:
+        st.markdown("<div class='sub-header'>📄 Análise de Declarações (DDE)</div>", unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Valores declarados vs pagos por ano
+            df_dde['vl_declarado_num'] = pd.to_numeric(df_dde['vl_declarado'], errors='coerce')
+            df_dde['vl_pago_num'] = pd.to_numeric(df_dde['vl_pago'], errors='coerce')
+
+            if 'ano' in df_dde.columns:
+                df_dde_ano = df_dde.groupby('ano').agg({
+                    'vl_declarado_num': 'sum',
+                    'vl_pago_num': 'sum'
+                }).reset_index()
+
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=df_dde_ano['ano'],
+                    y=df_dde_ano['vl_declarado_num'],
+                    name='Valor Declarado',
+                    marker_color='#1976d2'
+                ))
+                fig.add_trace(go.Bar(
+                    x=df_dde_ano['ano'],
+                    y=df_dde_ano['vl_pago_num'],
+                    name='Valor Pago',
+                    marker_color='#388e3c'
+                ))
+                fig.update_layout(
+                    title='💰 Declarações: Valores por Ano',
+                    template=filtros['tema'],
+                    height=400,
+                    barmode='group',
+                    xaxis_title='Ano',
+                    yaxis_title='Valor (R$)'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Distribuição por estado da conta
+            if 'cd_estado_conta' in df_dde.columns:
+                df_estado_conta = df_dde['cd_estado_conta'].value_counts().reset_index()
+                df_estado_conta.columns = ['estado_conta', 'quantidade']
+
+                fig = px.bar(
+                    df_estado_conta,
+                    x='estado_conta',
+                    y='quantidade',
+                    title='📊 Declarações por Estado da Conta',
+                    template=filtros['tema'],
+                    color='quantidade',
+                    color_continuous_scale='Purples',
+                    text='quantidade'
+                )
+                fig.update_traces(textposition='outside')
+                fig.update_layout(height=400, xaxis_title='Código Estado', yaxis_title='Quantidade')
+                st.plotly_chart(fig, use_container_width=True)
+
+    # ========== PERFORMANCE - TEMPO DE FISCALIZAÇÃO ==========
+    st.markdown("<div class='sub-header'>⏱️ Performance - Tempo de Fiscalização</div>", unsafe_allow_html=True)
+
+    if 'dt_inicio' in df_of.columns and 'dt_fim' in df_of.columns:
+        df_of_tempo = df_of.copy()
+        df_of_tempo['dt_inicio'] = pd.to_datetime(df_of_tempo['dt_inicio'], errors='coerce')
+        df_of_tempo['dt_fim'] = pd.to_datetime(df_of_tempo['dt_fim'], errors='coerce')
+        df_of_tempo['dias_fiscalizacao'] = (df_of_tempo['dt_fim'] - df_of_tempo['dt_inicio']).dt.days
+
+        # Filtrar valores válidos
+        df_of_tempo = df_of_tempo[df_of_tempo['dias_fiscalizacao'].notna() & (df_of_tempo['dias_fiscalizacao'] > 0)]
+
+        if not df_of_tempo.empty:
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                media_dias = df_of_tempo['dias_fiscalizacao'].mean()
+                st.metric("⏱️ Tempo Médio", f"{media_dias:.0f} dias")
+
+            with col2:
+                mediana_dias = df_of_tempo['dias_fiscalizacao'].median()
+                st.metric("📊 Mediana", f"{mediana_dias:.0f} dias")
+
+            with col3:
+                max_dias = df_of_tempo['dias_fiscalizacao'].max()
+                st.metric("📈 Máximo", f"{max_dias:.0f} dias")
+
+            # Histograma de tempo
+            fig = px.histogram(
+                df_of_tempo,
+                x='dias_fiscalizacao',
+                nbins=30,
+                title='📊 Distribuição do Tempo de Fiscalização',
+                template=filtros['tema'],
+                labels={'dias_fiscalizacao': 'Dias de Fiscalização'}
+            )
+            fig.update_layout(height=350, xaxis_title='Dias', yaxis_title='Frequência')
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ========== ANÁLISE POR MOTIVAÇÃO ==========
+    st.markdown("<div class='sub-header'>🎯 Análise por Motivação da OF</div>", unsafe_allow_html=True)
+
+    if 'tx_motivacao_of' in df_of.columns:
+        df_motivacao = df_of['tx_motivacao_of'].value_counts().head(10).reset_index()
+        df_motivacao.columns = ['motivacao', 'quantidade']
+
+        fig = px.bar(
+            df_motivacao,
+            y='motivacao',
+            x='quantidade',
+            title='🎯 OFs por Tipo de Motivação (Top 10)',
+            template=filtros['tema'],
+            orientation='h',
+            color='quantidade',
+            color_continuous_scale='Viridis',
+            text='quantidade'
+        )
+        fig.update_traces(textposition='outside')
+        fig.update_layout(height=400, yaxis_title='', xaxis_title='Quantidade')
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ========== DETALHAMENTO - TABELAS ==========
+    st.markdown("<div class='sub-header'>📋 Detalhamento dos Dados</div>", unsafe_allow_html=True)
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Ordens de Fiscalização", "📄 Declarações (DDE)", "📑 Notificações", "⚖️ Termos Infração"])
+
+    with tab1:
+        st.markdown("#### Ordens de Fiscalização do ITCMD")
+        colunas_of = ['nu_of', 'dt_documento', 'nm_estado', 'nm_gerencia', 'tx_motivacao_of', 'nm_local_emissao']
+        colunas_of_disponiveis = [c for c in colunas_of if c in df_of.columns]
+        st.dataframe(df_of[colunas_of_disponiveis].head(100), use_container_width=True)
+        st.caption(f"Exibindo até 100 de {len(df_of):,} registros")
+
+    with tab2:
+        if not df_dde.empty:
+            st.markdown("#### Declarações vinculadas às OFs do ITCMD")
+            colunas_dde = ['nu_declaracao', 'nu_of', 'nm_razao_social', 'vl_declarado', 'vl_pago', 'dt_entrega']
+            colunas_dde_disponiveis = [c for c in colunas_dde if c in df_dde.columns]
+            st.dataframe(df_dde[colunas_dde_disponiveis].head(100), use_container_width=True)
+            st.caption(f"Exibindo até 100 de {len(df_dde):,} registros")
+        else:
+            st.info("Nenhuma declaração encontrada.")
+
+    with tab3:
+        if not df_notif.empty:
+            st.markdown("#### Notificações Fiscais vinculadas às OFs do ITCMD")
+            colunas_notif = ['nu_notificacao_fiscal', 'nu_of', 'nm_razao_social', 'vl_total', 'vl_pago', 'nm_estado', 'dt_documento']
+            colunas_notif_disponiveis = [c for c in colunas_notif if c in df_notif.columns]
+            st.dataframe(df_notif[colunas_notif_disponiveis].head(100), use_container_width=True)
+            st.caption(f"Exibindo até 100 de {len(df_notif):,} registros")
+        else:
+            st.info("Nenhuma notificação encontrada.")
+
+    with tab4:
+        if not df_tifdp.empty:
+            st.markdown("#### Termos de Infração vinculados às OFs do ITCMD")
+            colunas_tifdp = ['nu_infr_fiscal', 'nu_of', 'nm_razao_social', 'vl_apurado', 'vl_pago', 'nm_estado', 'dt_documento']
+            colunas_tifdp_disponiveis = [c for c in colunas_tifdp if c in df_tifdp.columns]
+            st.dataframe(df_tifdp[colunas_tifdp_disponiveis].head(100), use_container_width=True)
+            st.caption(f"Exibindo até 100 de {len(df_tifdp):,} registros")
+        else:
+            st.info("Nenhum termo de infração encontrado.")
+
+    # ========== RESUMO FINAL ==========
+    st.markdown("<div class='sub-header'>📊 Resumo Consolidado ITCMD</div>", unsafe_allow_html=True)
+
+    # Calcular métricas consolidadas
+    valor_total_lancado = 0
+    valor_total_pago = 0
+
+    if not df_notif.empty and 'vl_total' in df_notif.columns:
+        valor_total_lancado += pd.to_numeric(df_notif['vl_total'], errors='coerce').sum()
+    if not df_tifdp.empty and 'vl_apurado' in df_tifdp.columns:
+        valor_total_lancado += pd.to_numeric(df_tifdp['vl_apurado'], errors='coerce').sum()
+
+    if not df_notif.empty and 'vl_pago' in df_notif.columns:
+        valor_total_pago += pd.to_numeric(df_notif['vl_pago'], errors='coerce').sum()
+    if not df_tifdp.empty and 'vl_pago' in df_tifdp.columns:
+        valor_total_pago += pd.to_numeric(df_tifdp['vl_pago'], errors='coerce').sum()
+    if not df_dde.empty and 'vl_pago' in df_dde.columns:
+        valor_total_pago += pd.to_numeric(df_dde['vl_pago'], errors='coerce').sum()
+
+    taxa_recuperacao_geral = (valor_total_pago / valor_total_lancado * 100) if valor_total_lancado > 0 else 0
+
+    st.markdown(f"""
+    <div class='alert-positivo'>
+    <b>📊 RESUMO DO SETOR ITCMD:</b><br>
+    • <b>Total de OFs:</b> {len(df_of):,}<br>
+    • <b>Valor Total Lançado:</b> {formatar_valor(valor_total_lancado)}<br>
+    • <b>Valor Total Recuperado:</b> {formatar_valor(valor_total_pago)}<br>
+    • <b>Taxa de Recuperação:</b> {taxa_recuperacao_geral:.2f}%<br>
+    • <b>Contribuintes Fiscalizados:</b> {len(contribuintes):,}
+    </div>
+    """, unsafe_allow_html=True)
+
 # =============================================================================
 # 9. FUNÇÃO PRINCIPAL
 # =============================================================================
@@ -3137,6 +3878,7 @@ def main():
     
     paginas = {
         "📊 Dashboard Executivo": pagina_dashboard_executivo,
+        "📜 ITCMD": pagina_itcmd,
         "📋 Ciclo de Vida - Estados": pagina_analise_estados,
         "🏢 Análise por Gerência": pagina_analise_gerencias,
         "🏭 Análise por GES": pagina_analise_ges,
