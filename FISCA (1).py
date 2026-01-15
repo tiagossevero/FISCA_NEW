@@ -894,10 +894,129 @@ def carregar_dados_itcmd(_engine):
             df_tifdp = pd.read_sql(query_tifdp, _engine)
             df_tifdp.columns = [col.lower() for col in df_tifdp.columns]
             dados_itcmd['tifdp_itcmd'] = df_tifdp
+
+            # 5. Catálogo de Infrações (para enriquecer com descrições)
+            query_infracoes = """
+                SELECT
+                    cd_infracao,
+                    de_infracao,
+                    nm_tributo,
+                    vl_multa
+                FROM usr_sat_ods.fis_tabela_infracoes
+            """
+            df_infracoes = pd.read_sql(query_infracoes, _engine)
+            df_infracoes.columns = [col.lower() for col in df_infracoes.columns]
+            dados_itcmd['catalogo_infracoes'] = df_infracoes
+
+            # 6. AFREs por Período (para análise de performance)
+            lista_matriculas = df_of['nu_mat_emitente'].dropna().unique().tolist()
+            lista_coord = df_of['nu_mat_coordenador'].dropna().unique().tolist()
+            todas_matriculas = list(set([str(m).strip() for m in lista_matriculas + lista_coord if m]))
+
+            if todas_matriculas:
+                matriculas_str = "', '".join(todas_matriculas)
+                query_afre = f"""
+                    SELECT
+                        cd_matricula,
+                        nm_afre,
+                        nu_ano_ref,
+                        nu_per_ref,
+                        qt_dias_ativa,
+                        dt_inicio_periodo,
+                        dt_fim_periodo
+                    FROM usr_sat_ods.fis_afre_periodo
+                    WHERE TRIM(cd_matricula) IN ('{matriculas_str}')
+                """
+                try:
+                    df_afre = pd.read_sql(query_afre, _engine)
+                    df_afre.columns = [col.lower() for col in df_afre.columns]
+                    dados_itcmd['afre_periodo'] = df_afre
+                except:
+                    dados_itcmd['afre_periodo'] = pd.DataFrame()
+            else:
+                dados_itcmd['afre_periodo'] = pd.DataFrame()
+
+            # 7. Dados dos Contribuintes (para perfil CNAE/regime)
+            lista_ies = set()
+            if not df_dde.empty and 'nu_ie' in df_dde.columns:
+                lista_ies.update(df_dde['nu_ie'].dropna().unique())
+            if not df_notif.empty and 'nu_ie' in df_notif.columns:
+                lista_ies.update(df_notif['nu_ie'].dropna().unique())
+            if not df_tifdp.empty and 'nu_ie' in df_tifdp.columns:
+                lista_ies.update(df_tifdp['nu_ie'].dropna().unique())
+
+            if lista_ies:
+                ies_str = "', '".join([str(ie) for ie in lista_ies])
+                query_contrib = f"""
+                    SELECT DISTINCT
+                        nu_ie,
+                        nu_cnpj,
+                        nm_razao_social,
+                        cd_cnae,
+                        nm_cnae_secao,
+                        nm_regime_tributario,
+                        nm_municipio
+                    FROM usr_sat_ods.vw_ods_contrib
+                    WHERE nu_ie IN ('{ies_str}')
+                """
+                try:
+                    df_contrib = pd.read_sql(query_contrib, _engine)
+                    df_contrib.columns = [col.lower() for col in df_contrib.columns]
+                    dados_itcmd['contribuintes'] = df_contrib
+                except:
+                    dados_itcmd['contribuintes'] = pd.DataFrame()
+            else:
+                dados_itcmd['contribuintes'] = pd.DataFrame()
+
+            # 8. Acompanhamentos (Follow-ups)
+            query_acomp = f"""
+                SELECT
+                    id_documento_os,
+                    nu_of,
+                    nm_estado_os,
+                    dt_documento,
+                    tx_observacao
+                FROM usr_sat_ods.fis_acomp_raw
+                WHERE nu_of IN ('{lista_ofs_str}')
+                ORDER BY dt_documento DESC
+            """
+            try:
+                df_acomp = pd.read_sql(query_acomp, _engine)
+                df_acomp.columns = [col.lower() for col in df_acomp.columns]
+                dados_itcmd['acompanhamentos'] = df_acomp
+            except:
+                dados_itcmd['acompanhamentos'] = pd.DataFrame()
+
+            # 9. Termos de Encerramento
+            query_termo = f"""
+                SELECT
+                    nu_termo_encerramento,
+                    nu_of,
+                    nm_estado,
+                    dt_documento,
+                    vl_icms_devido,
+                    vl_multa,
+                    vl_total
+                FROM usr_sat_ods.fis_termo_encerram_fisc_raw
+                WHERE nu_of IN ('{lista_ofs_str}')
+                ORDER BY dt_documento DESC
+            """
+            try:
+                df_termo = pd.read_sql(query_termo, _engine)
+                df_termo.columns = [col.lower() for col in df_termo.columns]
+                dados_itcmd['termos_encerramento'] = df_termo
+            except:
+                dados_itcmd['termos_encerramento'] = pd.DataFrame()
+
         else:
             dados_itcmd['dde_itcmd'] = pd.DataFrame()
             dados_itcmd['notif_itcmd'] = pd.DataFrame()
             dados_itcmd['tifdp_itcmd'] = pd.DataFrame()
+            dados_itcmd['catalogo_infracoes'] = pd.DataFrame()
+            dados_itcmd['afre_periodo'] = pd.DataFrame()
+            dados_itcmd['contribuintes'] = pd.DataFrame()
+            dados_itcmd['acompanhamentos'] = pd.DataFrame()
+            dados_itcmd['termos_encerramento'] = pd.DataFrame()
 
         return dados_itcmd
 
@@ -3783,6 +3902,321 @@ def pagina_itcmd(dados, filtros):
         fig.update_traces(textposition='outside')
         fig.update_layout(height=400, yaxis_title='', xaxis_title='Quantidade')
         st.plotly_chart(fig, use_container_width=True)
+
+    # ========== INFRAÇÕES COM DESCRIÇÕES ==========
+    df_catalogo = dados_itcmd.get('catalogo_infracoes', pd.DataFrame())
+
+    if not df_catalogo.empty and not df_notif.empty and 'cd_infracao' in df_notif.columns:
+        st.markdown("<div class='sub-header'>📖 Análise de Infrações (com Descrições)</div>", unsafe_allow_html=True)
+
+        # Enriquecer notificações com descrições
+        df_notif_enriq = df_notif.merge(
+            df_catalogo[['cd_infracao', 'de_infracao', 'nm_tributo']],
+            on='cd_infracao',
+            how='left'
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Top infrações por descrição
+            df_inf_desc = df_notif_enriq.groupby('de_infracao').agg({
+                'nu_notificacao_fiscal': 'count',
+                'vl_total': lambda x: pd.to_numeric(x, errors='coerce').sum()
+            }).reset_index()
+            df_inf_desc.columns = ['descricao', 'quantidade', 'valor_total']
+            df_inf_desc = df_inf_desc.nlargest(10, 'quantidade')
+
+            fig = px.bar(
+                df_inf_desc,
+                y='descricao',
+                x='quantidade',
+                title='📖 Top 10 Infrações por Descrição',
+                template=filtros['tema'],
+                orientation='h',
+                color='quantidade',
+                color_continuous_scale='Reds',
+                text='quantidade'
+            )
+            fig.update_traces(textposition='outside')
+            fig.update_layout(height=450, yaxis_title='', xaxis_title='Quantidade')
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Valor por tipo de infração
+            df_inf_valor = df_inf_desc.nlargest(10, 'valor_total')
+
+            fig = px.bar(
+                df_inf_valor,
+                y='descricao',
+                x='valor_total',
+                title='💰 Valor Total por Tipo de Infração',
+                template=filtros['tema'],
+                orientation='h',
+                color='valor_total',
+                color_continuous_scale='Oranges',
+                text_auto='.2s'
+            )
+            fig.update_layout(height=450, yaxis_title='', xaxis_title='Valor (R$)')
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Tabela detalhada de infrações
+        st.markdown("#### 📋 Catálogo de Infrações Utilizadas")
+        infracoes_usadas = df_notif_enriq[['cd_infracao', 'de_infracao', 'nm_tributo']].drop_duplicates()
+        infracoes_usadas.columns = ['Código', 'Descrição', 'Tributo']
+        st.dataframe(infracoes_usadas.head(20), use_container_width=True)
+
+    # ========== PERFORMANCE DOS AFREs ==========
+    df_afre = dados_itcmd.get('afre_periodo', pd.DataFrame())
+
+    if not df_afre.empty:
+        st.markdown("<div class='sub-header'>👥 Performance dos AFREs no ITCMD</div>", unsafe_allow_html=True)
+
+        # Contar OFs por AFRE (emitente)
+        df_of_afre = df_of.copy()
+        df_of_afre['nu_mat_emitente'] = df_of_afre['nu_mat_emitente'].astype(str).str.strip()
+
+        df_ranking_afre = df_of_afre.groupby('nu_mat_emitente').agg({
+            'nu_of': 'count',
+            'dt_documento': ['min', 'max']
+        }).reset_index()
+        df_ranking_afre.columns = ['matricula', 'qtd_ofs', 'primeira_of', 'ultima_of']
+
+        # Tentar enriquecer com nome do AFRE
+        if 'nm_afre' in df_afre.columns:
+            df_afre_nomes = df_afre[['cd_matricula', 'nm_afre']].drop_duplicates()
+            df_afre_nomes['cd_matricula'] = df_afre_nomes['cd_matricula'].astype(str).str.strip()
+            df_ranking_afre = df_ranking_afre.merge(
+                df_afre_nomes,
+                left_on='matricula',
+                right_on='cd_matricula',
+                how='left'
+            )
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            total_afres = df_ranking_afre['matricula'].nunique()
+            st.metric("👥 Total AFREs", f"{total_afres}")
+
+        with col2:
+            media_ofs = df_ranking_afre['qtd_ofs'].mean()
+            st.metric("📊 Média OFs/AFRE", f"{media_ofs:.1f}")
+
+        with col3:
+            max_ofs = df_ranking_afre['qtd_ofs'].max()
+            st.metric("🏆 Máximo OFs", f"{max_ofs}")
+
+        # Ranking de AFREs
+        st.markdown("#### 🏆 Ranking de AFREs por Volume de OFs")
+        df_ranking_display = df_ranking_afre.nlargest(15, 'qtd_ofs')
+
+        if 'nm_afre' in df_ranking_display.columns:
+            colunas_rank = ['matricula', 'nm_afre', 'qtd_ofs', 'primeira_of', 'ultima_of']
+        else:
+            colunas_rank = ['matricula', 'qtd_ofs', 'primeira_of', 'ultima_of']
+
+        colunas_rank = [c for c in colunas_rank if c in df_ranking_display.columns]
+        st.dataframe(df_ranking_display[colunas_rank], use_container_width=True)
+
+        # Gráfico de barras
+        fig = px.bar(
+            df_ranking_display.head(10),
+            x='matricula',
+            y='qtd_ofs',
+            title='📊 Top 10 AFREs por Quantidade de OFs',
+            template=filtros['tema'],
+            color='qtd_ofs',
+            color_continuous_scale='Blues',
+            text='qtd_ofs'
+        )
+        fig.update_traces(textposition='outside')
+        fig.update_layout(height=400, xaxis_title='Matrícula AFRE', yaxis_title='Quantidade de OFs')
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ========== PERFIL DOS CONTRIBUINTES ==========
+    df_contrib = dados_itcmd.get('contribuintes', pd.DataFrame())
+
+    if not df_contrib.empty:
+        st.markdown("<div class='sub-header'>🏢 Perfil dos Contribuintes</div>", unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Distribuição por CNAE
+            if 'nm_cnae_secao' in df_contrib.columns:
+                df_cnae = df_contrib['nm_cnae_secao'].value_counts().head(10).reset_index()
+                df_cnae.columns = ['setor', 'quantidade']
+
+                fig = px.pie(
+                    df_cnae,
+                    values='quantidade',
+                    names='setor',
+                    title='🏭 Distribuição por Setor Econômico (CNAE)',
+                    template=filtros['tema'],
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Distribuição por regime tributário
+            if 'nm_regime_tributario' in df_contrib.columns:
+                df_regime = df_contrib['nm_regime_tributario'].value_counts().reset_index()
+                df_regime.columns = ['regime', 'quantidade']
+
+                fig = px.bar(
+                    df_regime,
+                    x='regime',
+                    y='quantidade',
+                    title='📊 Distribuição por Regime Tributário',
+                    template=filtros['tema'],
+                    color='quantidade',
+                    color_continuous_scale='Purples',
+                    text='quantidade'
+                )
+                fig.update_traces(textposition='outside')
+                fig.update_layout(height=400, xaxis_title='Regime', yaxis_title='Quantidade')
+                st.plotly_chart(fig, use_container_width=True)
+
+        # Análise de reincidência
+        st.markdown("#### 🔄 Análise de Reincidência")
+
+        # Contar contribuintes com múltiplas ocorrências
+        df_todas_ies = pd.concat([
+            df_dde[['nu_ie']].dropna() if not df_dde.empty and 'nu_ie' in df_dde.columns else pd.DataFrame(),
+            df_notif[['nu_ie']].dropna() if not df_notif.empty and 'nu_ie' in df_notif.columns else pd.DataFrame(),
+            df_tifdp[['nu_ie']].dropna() if not df_tifdp.empty and 'nu_ie' in df_tifdp.columns else pd.DataFrame()
+        ])
+
+        if not df_todas_ies.empty:
+            reincidencia = df_todas_ies['nu_ie'].value_counts()
+            reincidentes = (reincidencia > 1).sum()
+            total_contrib = len(reincidencia)
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("🏢 Total Contribuintes", f"{total_contrib:,}")
+            with col2:
+                st.metric("🔄 Reincidentes", f"{reincidentes:,}")
+            with col3:
+                taxa_reinc = (reincidentes / total_contrib * 100) if total_contrib > 0 else 0
+                st.metric("📊 Taxa Reincidência", f"{taxa_reinc:.1f}%")
+
+    # ========== ACOMPANHAMENTOS (FOLLOW-UPS) ==========
+    df_acomp = dados_itcmd.get('acompanhamentos', pd.DataFrame())
+
+    if not df_acomp.empty:
+        st.markdown("<div class='sub-header'>📋 Acompanhamentos (Follow-ups)</div>", unsafe_allow_html=True)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            total_acomp = len(df_acomp)
+            st.metric("📋 Total Acompanhamentos", f"{total_acomp:,}")
+
+        with col2:
+            ofs_com_acomp = df_acomp['nu_of'].nunique()
+            st.metric("📁 OFs com Follow-up", f"{ofs_com_acomp:,}")
+
+        with col3:
+            taxa_acomp = (ofs_com_acomp / len(df_of) * 100) if len(df_of) > 0 else 0
+            st.metric("📊 Taxa Follow-up", f"{taxa_acomp:.1f}%")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Status dos acompanhamentos
+            if 'nm_estado_os' in df_acomp.columns:
+                df_status_acomp = df_acomp['nm_estado_os'].value_counts().reset_index()
+                df_status_acomp.columns = ['status', 'quantidade']
+
+                fig = px.pie(
+                    df_status_acomp,
+                    values='quantidade',
+                    names='status',
+                    title='📊 Status dos Acompanhamentos',
+                    template=filtros['tema'],
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(height=350)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Últimos acompanhamentos
+            st.markdown("#### 📋 Últimos Acompanhamentos")
+            colunas_acomp = ['nu_of', 'nm_estado_os', 'dt_documento']
+            colunas_acomp = [c for c in colunas_acomp if c in df_acomp.columns]
+            st.dataframe(df_acomp[colunas_acomp].head(10), use_container_width=True)
+
+    # ========== TERMOS DE ENCERRAMENTO ==========
+    df_termo = dados_itcmd.get('termos_encerramento', pd.DataFrame())
+
+    if not df_termo.empty:
+        st.markdown("<div class='sub-header'>📑 Termos de Encerramento</div>", unsafe_allow_html=True)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            total_termos = len(df_termo)
+            st.metric("📑 Total Termos", f"{total_termos:,}")
+
+        with col2:
+            ofs_encerradas = df_termo['nu_of'].nunique()
+            st.metric("✅ OFs Encerradas", f"{ofs_encerradas:,}")
+
+        with col3:
+            taxa_encerramento = (ofs_encerradas / len(df_of) * 100) if len(df_of) > 0 else 0
+            st.metric("📊 Taxa Encerramento", f"{taxa_encerramento:.1f}%")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Status dos encerramentos
+            if 'nm_estado' in df_termo.columns:
+                df_status_termo = df_termo['nm_estado'].value_counts().reset_index()
+                df_status_termo.columns = ['status', 'quantidade']
+
+                fig = px.pie(
+                    df_status_termo,
+                    values='quantidade',
+                    names='status',
+                    title='📊 Status dos Encerramentos',
+                    template=filtros['tema'],
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(height=350)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Funil de conclusão
+            st.markdown("#### 🔄 Funil de Conclusão")
+
+            total_ofs = len(df_of)
+            ofs_com_notif = df_notif['nu_of'].nunique() if not df_notif.empty else 0
+            ofs_encerradas = df_termo['nu_of'].nunique()
+
+            fig = go.Figure(go.Funnel(
+                y=['OFs Abertas', 'Com Notificação', 'Encerradas'],
+                x=[total_ofs, ofs_com_notif, ofs_encerradas],
+                textinfo="value+percent initial",
+                marker_color=['#1976d2', '#388e3c', '#7b1fa2']
+            ))
+            fig.update_layout(
+                title='Funil: OF → Notificação → Encerramento',
+                template=filtros['tema'],
+                height=350
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Tabela de termos recentes
+        st.markdown("#### 📋 Termos de Encerramento Recentes")
+        colunas_termo = ['nu_termo_encerramento', 'nu_of', 'nm_estado', 'dt_documento']
+        colunas_termo = [c for c in colunas_termo if c in df_termo.columns]
+        st.dataframe(df_termo[colunas_termo].head(15), use_container_width=True)
 
     # ========== DETALHAMENTO - TABELAS ==========
     st.markdown("<div class='sub-header'>📋 Detalhamento dos Dados</div>", unsafe_allow_html=True)
